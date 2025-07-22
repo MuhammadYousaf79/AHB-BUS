@@ -1,8 +1,8 @@
-`ifndef HEADER.svh
-`define HEADER.svh
+module ahb_master #(
+    parameter DATA_WIDTH = 32,
+    parameter ADDR_WIDTH = 32
 
-
-module ahb_master (
+) (
 
     // Global Signals
     input logic Hclk,
@@ -43,13 +43,16 @@ module ahb_master (
 
 );
 
+logic HWrite_next;
+logic [DATA_WIDTH-1:0] HWdata_next;
+logic [DATA_WIDTH-1:0] Prdata_next;
+
 logic addr_put;
 logic data_put;
 
 typedef enum logic [1:0] {
     IDLE,
-    REQUEST,
-    ADDR_PHASE,
+    REQUEST_ADDR_PHASE,
     DATA_PHASE
 } state_t;
 
@@ -59,27 +62,40 @@ always_ff @(posedge Hclk or negedge Hresetn) begin
 
     if (!Hresetn) begin
         C_state <= IDLE;
-        Htrans <= 2'b00;
-        Hreq <= 1'b0;
-
+        HWrite <= 1'b0;
+        HWdata <= 'b0;
+        Prdata <= 'b0;
     end else begin
         C_state <= N_state;
-
-        if (addr_put) begin
-            Haddr <= Paddr;
-            Hsize <= Psize;
-            Hburst <= 3'b000;
-            Htrans <= 2'b10;
-            Hstrb <= Pstrb;
-            HWrite <= Pstore; // Write if store, else read
-        end
-        if (data_put) begin
-            if (Pstore) HWdata <= Pwdata; // Store data to write bus
-            if (Pload) Prdata <= HRdata; // Load data from read bus
-        end
-
+        HWrite <= HWrite_next;
+        HWdata <= HWdata_next;
+        Prdata <= Prdata_next;
     end
+end
 
+always_comb begin
+    HWrite_next = 1'b0;
+    HWdata_next = 'b0;
+    Prdata_next = 'b0;
+
+    Haddr = '0;
+    Hsize = '0;
+    Hburst = '0;
+    Htrans = '0;
+    Hstrb = '0;
+
+    if (addr_put) begin
+        Haddr = Paddr;
+        Hsize = Psize;
+        Hburst = Pburst;
+        Htrans = Ptrans;
+        Hstrb = Pstrb;
+        HWrite_next = Pstore;
+    end
+    if (data_put) begin
+        if (HWrite) HWdata_next = Pwdata;
+        else Prdata_next = HRdata;
+    end
 end
 
 always_comb begin
@@ -87,32 +103,23 @@ always_comb begin
     N_state = C_state;
     addr_put = 1'b0;
     data_put = 1'b0;
-end
-
-always_comb begin
 
     case (C_state)
 
         IDLE: begin
+            Hreq = 1'b0; // Deassert request
             if (Pload || Pstore)  begin
                 Hreq = 1'b1; // Assert request to the arbiter
-                N_state = REQUEST;
+                N_state = REQUEST_ADDR_PHASE;
             end
         end
 
-        REQUEST: begin
+        REQUEST_ADDR_PHASE: begin
             Hreq = 1'b1; // Keep assert request after entering REQUEST state
-            if (Hgrant) begin
-                N_state = ADDR_PHASE;
-                Hreq = 1'b0; // Deassert request once granted
-            end
-        end
-        ADDR_PHASE: begin
             if (Hgrant && Hready) begin
-                addr_put = 1'b1;
                 N_state = DATA_PHASE;
-            end else begin
-                addr_put = 1'b0;
+                addr_put = 1'b1; // Prepare to send address
+                Hreq = 1'b0; // Deassert request once granted
             end
         end
         DATA_PHASE: begin
@@ -128,5 +135,3 @@ always_comb begin
 end
 
 endmodule
-
-`endif
